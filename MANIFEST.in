@@ -1,0 +1,2 @@
+include avclass/data/default.aliases
+include avclass/data/default.generics

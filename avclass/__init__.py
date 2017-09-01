@@ -289,27 +289,37 @@ class AvLabels(object):
         return avs
 
     @staticmethod
-    def get_sample_info(vt_rep, from_vt):
-        '''Parse and extract sample information from JSON line
+    def get_sample_info(data):
+        '''Parse and extract sample information from JSON data
            Returns a SampleInfo named tuple: md5, sha1, sha256, label_pairs 
+           
+           This method has been improved to handle multiple JSON data formats
+           Recognized formats include:
+           - VT File Report
+           - VT Notification
+           - AVClass simplified JSON
         '''
-        label_pairs = []
-        if from_vt:
-            try:
-                scans = vt_rep['scans']
-            except KeyError:
-                return None
-            for av, res in scans.items():
-                if res['detected']:
-                    label = res['result']
-                    clean_label = filter(lambda x: x in string.printable, 
-                                      label).strip().encode('utf-8').strip()
-                    label_pairs.append((av, clean_label))
-        else:
-            label_pairs = vt_rep['av_labels']
+        try:
+            if "response_code" in data:
+                # VT file report
+                strip_unprintable = lambda x: x in string.printable
+                clean = lambda x: filter(strip_unprintable, x).strip().encode('utf-8')
 
-        return SampleInfo(vt_rep['md5'], vt_rep['sha1'], vt_rep['sha256'],
-                          label_pairs) 
+                if data["response_code"] == 0:
+                    return None
+                label_paris = [(av,clean(result["result"])) for av,result in data["scans"].items() if result["result"] is not None]
+            elif "ruleset_name" in data:
+                # VT notification
+                strip_unprintable = lambda x: x in string.printable
+                clean = lambda x: filter(strip_unprintable, x).strip().encode('utf-8')
+
+                label_pairs = [(av,clean(result)) for av,result in data["scans"].items() if result is not None]
+            else:
+                label_pairs = data["av_labels"]
+        except KeyError:
+            return None
+
+        return SampleInfo(data['md5'], data['sha1'], data['sha256'], label_pairs) 
 
     @staticmethod
     def is_pup(av_label_pairs):

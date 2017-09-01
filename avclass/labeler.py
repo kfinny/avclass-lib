@@ -33,6 +33,7 @@ class Labeler(object):
             raise Exception("'{}' does not exist: out_dir must exist if specified".format(out_dir))
 
     def process_sample(self, sample_info):
+        self.processed += 1
         # Sample's name is selected hash type (md5 by default)
         name = getattr(sample_info, self.hashtype)
 
@@ -95,7 +96,7 @@ class Labeler(object):
             self.fam_stats[ff] = (numAll, numMal, numPup)
         return LabeledSample._make(sample_info + (family, tokens, gt_family, is_pup,))
 
-    def process_files(self, ifile_l, ifile_are_vt, pup=False, fam=False):
+    def process_files(self, ifile_l):
         # Process each input file
         for ifile in ifile_l:
             # Open file
@@ -116,13 +117,13 @@ class Labeler(object):
                     if self.processed % 100 == 0:
                         sys.stderr.write("\r[-] {:d} JSON read".format(self.processed))
                         sys.stderr.flush()
-                    self.processed += 1
 
                     # Read JSON line and extract sample info (i.e., hashes and labels)
-                    vt_rep = json.loads(line)
-                    sample_info = self.av_labels.get_sample_info(vt_rep, ifile_are_vt)
+                    data = json.loads(line)
+                    sample_info = self.av_labels.get_sample_info(data)
                     # If the VT report has no AV labels, continue
                     if sample_info is None or sample_info.labels is None:
+                        self.processed += 1
                         self.empty +=1
                         continue
 

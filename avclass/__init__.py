@@ -307,7 +307,7 @@ class AvLabels(object):
 
                 if data["response_code"] == 0:
                     return None
-                label_paris = [(av,clean(result["result"])) for av,result in data["scans"].items() if result["result"] is not None]
+                label_pairs = [(av,clean(result["result"])) for av,result in data["scans"].items() if result["result"] is not None]
             elif "ruleset_name" in data:
                 # VT notification
                 strip_unprintable = lambda x: x in string.printable

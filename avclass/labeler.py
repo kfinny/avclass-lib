@@ -1,190 +1,275 @@
-from avclass import *
+from .avclass import AvLabels, LabeledSample
+from .stats import FamilyStats, eval_precision_recall_fmeasure
+from .util import pick_hash
+import csv
+from hashlib import sha256
 from operator import itemgetter
-import os
-from os.path import basename, splitext, join, exists
-import sys
 import json
 import traceback
+import logging
+
+__all__ = ("Labeler", "Detector", "GroundTruth")
+
 
 class Labeler(object):
 
-    def __init__(self, av_labels, hashtype='sha256', pup=False, family=False,
-                 detector=None, gt_dict=None, eval=False, out_dir="./"):
-        self.hashtype = hashtype
-        hlen = HASH_TYPE_MAP[self.hashtype]
-        if hlen is None:
-            raise Exception("Invalid hashtype provided: {}".format(self.hashtype))
-        self.gt_dict = {} if gt_dict is None else gt_dict
-        self.eval = True
-        self.av_labels = av_labels
-        self.pup = pup
-        self.family = family
-        self.detector = detector
-        
+    def __init__(self, av_labels=None, gt_path=None):
+        self.av_labels = AvLabels() if av_labels is None else av_labels
+        self.ground_truth = GroundTruth()
+        if gt_path is not None:
+            try:
+                self.ground_truth.load_ground_truth(gt_path)
+            except IOError:
+                logging.warning("Could not load ground truth file at {}".format(gt_path))
+        self.detector = Detector()
+        self.pup = True
+
         # Initialize state
         self.processed = 0
         self.empty = 0
         self.singletons = 0
-        self.first_token_dict = {}
-        self.fam_stats = {}
-        if exists(out_dir):
-            self.out_dir = out_dir
-        else:
-            raise Exception("'{}' does not exist: out_dir must exist if specified".format(out_dir))
+        self.fam_stats = FamilyStats()
+
+    def toggle_pup(self):
+        self.pup = not self.pup
+        return self.pup
+
+    def toggle_generic_detection(self):
+        self.detector.generic = not self.detector.generic
+        return self.detector.generic
+
+    def toggle_alias_detection(self):
+        self.detector.alias = not self.detector.alias
+        return self.detector.alias
 
     def process_sample(self, sample_info):
         self.processed += 1
-        # Sample's name is selected hash type (md5 by default)
-        name = getattr(sample_info, self.hashtype)
+        if sample_info is None or sample_info.labels is None:
+            self.empty += 1
+            return None
+        # Sample's hashval is selected hash type (sha256 by default)
+        hashval = pick_hash(sample_info)
 
         # Get distinct tokens from AV labels
         tokens = self.av_labels.get_family_ranking(sample_info).items()
-
-        # If alias detection, populate maps
-        if self.detector is not None:
-            self.detector.detect_aliases(tokens)
-            self.detector.detect_generics(tokens)
-
-        # Top candidate is most likely family name
+        # Top candidate is most likely family
         if tokens:
             family = tokens[0][0]
-            is_singleton = False
         else:
-            family = "SINGLETON:" + name
-            is_singleton = True
+            family = "SINGLETON:" + hashval
             self.singletons += 1
 
         # Check if sample is PUP, if requested
-        if self.pup:
-            is_pup = self.av_labels.is_pup(sample_info.labels)
-            if is_pup:
-                is_pup_str = "\t1"
-            else:
-                is_pup_str = "\t0"
-        else:
-            is_pup = None
-            is_pup_str =  ""
-
-        # Build family map for precision, recall, computation
-        self.first_token_dict[name] = family
+        is_pup = self.av_labels.is_pup(sample_info.labels) if self.pup else None
 
         # Get ground truth family, if available
-        if len(self.gt_dict) == 0:
-            gt_family = None
-        else:
-            gt_family = self.gt_dict[name] if name in self.gt_dict else None
+        gt_family, hashval = self.ground_truth.retrieve(*sample_info)
+        if hashval is not None:
+            # Build family map for precision, recall, computation
+            # noinspection PyTypeChecker
+            self.ground_truth.label(hashval, family)
+
+        # If alias detection and/or generic detection, populate maps
+        self.detector.update(gt_family, tokens)
 
         # Store family stats (if required)
-        if self.family:
-            if is_singleton:
-                ff = 'SINGLETONS'
-            else:
-                ff = family
-            try:
-                numAll, numMal, numPup = self.fam_stats[ff]
-            except KeyError:
-                numAll = 0
-                numMal = 0
-                numPup = 0
+        self.fam_stats.update(gt_family if gt_family is not None else family, is_pup)
+        return LabeledSample(*(sample_info + (family, tokens, gt_family, is_pup,)))
 
-            numAll += 1
-            if self.pup:
-                if is_pup:
-                    numPup += 1
-                else:
-                    numMal += 1
-            self.fam_stats[ff] = (numAll, numMal, numPup)
-        return LabeledSample._make(sample_info + (family, tokens, gt_family, is_pup,))
+    def process_json(self, json_data):
+        sample_info = self.av_labels.get_sample_info(json_data)
+        try:
+            return self.process_sample(sample_info)
+        except:
+            logging.warning(traceback.format_exc())
+            return None
 
-    def process_files(self, ifile_l):
+    def process_files(self, file_list, line_delimited=False):
         # Process each input file
-        for ifile in ifile_l:
-            # Open file
-            with open(ifile, "r") as fd:
-
+        for path in file_list:
+            with open(path, "r") as fd:
                 # Debug info, file processed
-                #sys.stderr.write('[-] Processing input file %s\n' % ifile)
-                sys.stderr.write("[-] Processing input file {}\n".format(ifile))
+                logging.info("[-] Processing input file {}".format(path))
 
-                # Process all lines in file
-                for line in fd:
+                if line_delimited:
+                    # Process all lines in file
+                    for line in fd:
+                        # If blank line, skip
+                        if line == '\n':
+                            continue
 
-                    # If blank line, skip
-                    if line == '\n':
-                        continue
+                        # Debug info
+                        if self.processed % 100 == 0:
+                            logging.debug("[-] {:d} JSON read".format(self.processed))
 
-                    # Debug info
-                    if self.processed % 100 == 0:
-                        sys.stderr.write("\r[-] {:d} JSON read".format(self.processed))
-                        sys.stderr.flush()
+                        yield self.process_json(json.loads(line))
+                else:
+                    yield self.process_json(json.load(fd))
 
-                    # Read JSON line and extract sample info (i.e., hashes and labels)
-                    data = json.loads(line)
-                    sample_info = self.av_labels.get_sample_info(data)
-                    # If the VT report has no AV labels, continue
-                    if sample_info is None or sample_info.labels is None:
-                        self.processed += 1
-                        self.empty +=1
-                        continue
+        logging.debug("[-] {:d} JSON read".format(self.processed))
 
-                    try:
-                        yield self.process_sample(sample_info)
-                    except:
-                        traceback.print_exc(file=sys.stderr)
-                        continue
-
-                # Debug info
-                sys.stderr.write("\r[-] {:d} JSON read".format(self.processed))
-                sys.stderr.flush()
-                sys.stderr.write('\n')
-
-    def print_statistics(self, out_prefix):
+    def log_statistics(self):
         # Print statistics
-        sys.stderr.write(
-                "[-] Samples: {:d} NoLabels: {:d} Singletons: {:d} "
-                "GroundTruth: {:d}\n".format(
-                    self.processed, self.empty, self.singletons, len(self.gt_dict)))
+        logging.info("[-] Samples: {:d} NoLabels: {:d} Singletons: {:d}".format(
+            self.processed, self.empty, self.singletons))
 
         # If ground truth, print precision, recall, and F1-measure
-        if len(self.gt_dict) > 0 and self.eval:
-            precision, recall, fmeasure = eval_precision_recall_fmeasure(self.gt_dict,
-                                                                         self.first_token_dict)
-            sys.stderr.write("Precision: {:.2f}\tRecall: {:.2f}\tF1-Measure: {:.2f}\n".format(
+        self.ground_truth.log_statistics()
+
+    def __str__(self):
+        return "yeah, sure"
+
+
+class GroundTruth(object):
+
+    def __init__(self):
+        self.mapped = {}
+        self.labeled = {}
+
+    def load_ground_truth(self, gt_path, dialect=csv.excel_tab, has_header=False):
+        with open(gt_path, 'r') as gt_fd:
+            reader = csv.reader(gt_fd, dialect=dialect)
+            if has_header:
+                reader.next()
+            for row in reader:
+                self.update(*row)
+
+    def update(self, hashval, family):
+        hv = hashval.strip().lower()
+        self.mapped[sha256(hv).hexdigest()] = (family, hashval, )
+
+    def label(self, hashval, family):
+        """Applies family label to labeled dict if hashval is in ground truth dict
+
+        :param hashval: str
+        :param family: str
+        """
+        hv = sha256(hashval.strip().lower()).hexdigest()
+        if hv in self.mapped:
+            self.labeled[hv] = (family, hashval, )
+
+    def retrieve(self, *hashvals):
+        if len(self.mapped) == 0:
+            return None, None
+        hv = self.contains(*hashvals)
+        if hv is not None:
+            return self.mapped[hv]
+        return None, None
+
+    def contains(self, *hashvals):
+        for hv in [sha256(h.strip().lower()).hexdigest() for h in hashvals if isinstance(h, str)]:
+            if hv in self.mapped:
+                return hv
+        return None
+
+    def log_statistics(self):
+        if len(self.mapped) > 0 and set(self.mapped.keys()) == set(self.labeled.keys()):
+            gt = dict([(hv, family[0]) for hv, family in self.mapped.items()])
+            lb = dict([(hv, family[0]) for hv, family in self.labeled.items()])
+            precision, recall, fmeasure = eval_precision_recall_fmeasure(gt, lb)
+            logging.info("Precision: {:.2f}\tRecall: {:.2f}\tF1-Measure: {:.2f}".format(
                               precision, recall, fmeasure))
+        else:
+            logging.info("[-] labeled and mapped dictionaries are not equivalent, will not calculate precision, recall "
+                         "and F1-measure")
 
-        if self.detector is not None:
-            self.detector.write_generic_map(join(self.out_dir, out_prefix + '.gen'))
-            self.detector.write_alias_map(join(self.out_dir, out_prefix + '.alias'))
 
-        # If family statistics, output to file
-        if self.family:
-            self.write_family_data(join(self.out_dir, out_prefix + '.families'))
+class Detector(object):
 
-    def write_family_data(self, path):
+    def __init__(self):
+        self.alias = True
+        self.generic = True
+        self.generic_threshold = 8
+        self.token_count_map = {}
+        self.pair_count_map = {}
+        self.token_family_map = {}
+
+    def update(self, gt_family, tokens):
+        """Convenience method that calls detect_aliases and detect_generics
+
+        :param gt_family:
+        :param tokens:
+        """
+        self.detect_aliases(tokens)
+        self.detect_generics(gt_family, tokens)
+
+    def detect_aliases(self, tokens):
+        """List of 2-tuple (token, count) where count is occurrence across labels for given sample
+
+        :param tokens:
+        :return:
+        """
+        if not self.alias:
+            return
+
+        def inc_map_count(_map, key):
+            _map[key] = _map.get(key, 0) + 1
+
+        seen_tokens = []
+        for tok in sorted(set([t for t, c in tokens])):
+            inc_map_count(self.token_count_map, tok)
+            for prev_tok in sorted(seen_tokens):
+                pair = (prev_tok, tok)
+                inc_map_count(self.pair_count_map, pair)
+            seen_tokens.append(tok)
+
+    def detect_generics(self, gt_family, tokens):
+        """List of 2-tuple (token, count) where count is occurrence across labels for given sample
+
+        :param gt_family:
+        :param tokens:
+        :return:
+        """
+        if not self.generic or gt_family is None:
+            return
+        for tok, count in tokens:
+            if tok not in self.token_family_map:
+                self.token_family_map[tok] = set()
+            self.token_family_map[tok].add(gt_family)
+
+    def write_alias_map(self, path):
+        if not self.alias:
+            return
         try:
-            with open(path, "w+") as fam_fd:
+            sorted_pairs = sorted(
+                self.pair_count_map.items(), key=itemgetter(1), reverse=True)
+            with open(path, 'w+') as alias_fd:
+                # Sort token pairs by number of times they appear together
+                writer = csv.writer(alias_fd, dialect=csv.excel_tab)
                 # Output header line
-                if self.pup:
-                    fam_fd.write("# Family\tTotal\tMalware\tPUP\tFamType\n")
-                else:
-                    fam_fd.write("# Family\tTotal\n")
-                # Sort map
-                sorted_pairs = sorted(self.fam_stats.items(), key=itemgetter(1),
-                                      reverse=True)
-                # Print map contents
-                for (f,fstat) in sorted_pairs:
-                    if self.pup:
-                        if fstat[1] > fstat[2]:
-                            famType = "malware"
-                        else:
-                            famType = "pup"
-                        #fam_fd.write("%s\t%d\t%d\t%d\t%s\n" % (f, fstat[0], fstat[1],
-                        fam_fd.write("{}\t{:d}\t{:d}\t{:d}\t{}\n".format(
-                            f, fstat[0], fstat[1], fstat[2], famType))
+                writer.writerow(["t1", "t2", "|t1|", "|t2|", "|t1^t2|", "|t1^t2|/|t1|"])
+                # Compute token pair statistic and output to alias file
+                for (t1, t2), c in sorted_pairs:
+                    n1 = self.token_count_map[t1]
+                    n2 = self.token_count_map[t2]
+                    if n1 < n2:
+                        x = t1
+                        y = t2
+                        xn = n1
+                        yn = n2
                     else:
-                        #fam_fd.write("%s\t%d\n" % (f, fstat[0]))
-                        fam_fd.write("{}\t{:d}\n".format(f, fstat[0]))
-            sys.stderr.write("[-] Family data in {}\n".format(path))
-        except:
-            sys.stderr.write("[-] Error writing family data to {}\n".format(path))
-            traceback.print_exc(file=sys.stderr)
+                        x = t2
+                        y = t1
+                        xn = n2
+                        yn = n1
+                    f = float(c) / float(xn)
+                    writer.writerow([x, y, str(xn), str(yn), str(c), "{:.2f}".format(f)])
+            logging.info("[-] Alias data in {}".format(path))
+        except IOError:
+            logging.warning("[-] Error writing alias data to {}".format(path))
+
+    def write_generic_map(self, path):
+        if not self.generic:
+            return
+        try:
+            with open(path, 'w+') as gen_fd:
+                # Output header line
+                gen_fd.write("Token\t#Families\n")
+                sorted_pairs = sorted(self.token_family_map.items(),
+                                      key=lambda x: len(x[1]) if x[1] else 0,
+                                      reverse=True)
+                for (t, fset) in sorted_pairs:
+                    gen_fd.write("{}\t{:d}\n".format(t, len(fset)))
+            logging.info("[-] Generic token data in {}".format(path))
+        except IOError:
+            logging.warning("[-] Error writing generic token data to {}".format(path))

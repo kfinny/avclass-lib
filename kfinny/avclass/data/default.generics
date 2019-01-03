@@ -38,6 +38,8 @@ memscan
 
 # ML detection
 confidence
+score
+unsafe
 
 # Malware classes
 trojan

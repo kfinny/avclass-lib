@@ -1,2 +1,2 @@
-include avclass/data/default.aliases
-include avclass/data/default.generics
+include kfinny/avclass/data/default.aliases
+include kfinny/avclass/data/default.generics

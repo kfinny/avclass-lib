@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(name='kfinny.avclass',
-      version='2.1',
+      version='2.2',
       description="A package for malicialab's avclass",
       url='https://github.com/kfinny/avclass-lib',
       author='Kevin Finnigin',

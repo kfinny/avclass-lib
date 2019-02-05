@@ -191,6 +191,13 @@ class AvLabels(object):
 
         return label
 
+    def update_aliases(self, alias_file):
+        try:
+            alias_map = AvLabels.read_aliases(alias_file)
+            self.aliases_map.update(alias_map)
+        except:
+            logging.warning(traceback.format_exc())
+
     def __normalize(self, label, hashes):
         """Tokenize label, filter tokens, and replace aliases"""
 

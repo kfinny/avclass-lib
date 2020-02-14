@@ -4,6 +4,7 @@ from .util import pick_hash
 import csv
 from hashlib import sha256
 from operator import itemgetter
+from six import iteritems
 import json
 import traceback
 import logging
@@ -51,7 +52,7 @@ class Labeler(object):
         hashval = pick_hash(sample_info)
 
         # Get distinct tokens from AV labels
-        tokens = self.av_labels.get_family_ranking(sample_info).items()
+        tokens = list(iteritems(self.av_labels.get_family_ranking(sample_info)))  # python 2/3
         # Top candidate is most likely family
         if tokens:
             family = tokens[0][0]

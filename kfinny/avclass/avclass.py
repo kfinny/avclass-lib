@@ -6,6 +6,8 @@ import re
 import string
 import traceback
 
+from six import iteritems
+
 __all__ = ("SampleInfo",
            "LabeledSample",
            "AvLabels",)
@@ -93,7 +95,7 @@ class AvLabels(object):
            - AVClass simplified JSON
         """
         def clean(value):
-            return filter(lambda x: x in string.printable, value).strip().encode('utf-8')
+            return "".join([x for x in value if x in string.printable]).strip()
 
         try:
             if "response_code" in data:
@@ -148,7 +150,7 @@ class AvLabels(object):
                            if p[0] in av_set])
 
         # Number of AVs that flagged the sample as PUP
-        av_pup = map(lambda x: x[1], bool_set).count(True)
+        av_pup = list(map(lambda x: x[1], bool_set)).count(True)  # python 2/3, inefficient on Py2
 
         # Flag as PUP according to a threshold
         if (float(av_pup) >= float(av_detected) * threshold) and av_pup != 0:
@@ -307,7 +309,7 @@ class AvLabels(object):
         ##################################################################
         # Token ranking: sorts tokens by decreasing count and then token #
         ##################################################################
-        sorted_tokens = sorted(token_map.iteritems(),
+        sorted_tokens = sorted(iteritems(token_map),
                                key=itemgetter(1, 0),
                                reverse=True)
 

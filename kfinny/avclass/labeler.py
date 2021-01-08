@@ -52,7 +52,7 @@ class Labeler(object):
         hashval = pick_hash(sample_info)
 
         # Get distinct tokens from AV labels
-        tokens = list(iteritems(self.av_labels.get_family_ranking(sample_info)))  # python 2/3
+        tokens = list(self.av_labels.get_family_ranking(sample_info).items())
         # Top candidate is most likely family
         if tokens:
             family = tokens[0][0]
@@ -76,6 +76,10 @@ class Labeler(object):
         # Store family stats (if required)
         self.fam_stats.update(gt_family if gt_family is not None else family, is_pup)
         return LabeledSample(*(sample_info + (family, tokens, gt_family, is_pup,)))
+
+    def process_object(self, obj):
+        sample_info = self.av_labels.get_sample_info(obj)
+        return self.process_sample(sample_info)
 
     def process_json(self, json_data):
         sample_info = self.av_labels.get_sample_info(json_data)

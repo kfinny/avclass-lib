@@ -5,8 +5,7 @@ from operator import itemgetter
 import re
 import string
 import traceback
-
-from six import iteritems
+from vt.object import Object
 
 __all__ = ("SampleInfo",
            "LabeledSample",
@@ -97,24 +96,34 @@ class AvLabels(object):
         def clean(value):
             return "".join([x for x in value if x in string.printable]).strip()
 
-        try:
-            if "response_code" in data:
-                # VT file report
+        if isinstance(data, Object):
+            if data.type == 'file':
+                label_pairs = list(
+                    map(lambda r: (r['engine_name'], clean(r['result'])),
+                        filter(lambda x: x['result'] is not None,
+                               data.last_analysis_results.values()))
+                )
+                return SampleInfo(data.md5, data.sha1, data.sha256, label_pairs)
+        elif isinstance(data, dict):
+            try:
+                if "response_code" in data:
+                    # VT file report
 
-                if data["response_code"] == 0:
-                    return None
-                label_pairs = [(av, clean(result["result"])) for av, result in data["scans"].items() if
-                               result["result"] is not None]
-            elif "ruleset_name" in data:
-                # VT notification
+                    if data["response_code"] == 0:
+                        return None
+                    label_pairs = [(av, clean(result["result"])) for av, result in data["scans"].items() if
+                                   result["result"] is not None]
+                elif "ruleset_name" in data:
+                    # VT notification
 
-                label_pairs = [(av, clean(result)) for av, result in data["scans"].items() if result is not None]
-            else:
-                label_pairs = data["av_labels"]
-        except KeyError:
-            return None
+                    label_pairs = [(av, clean(result)) for av, result in data["scans"].items() if result is not None]
+                else:
+                    label_pairs = data["av_labels"]
+            except KeyError:
+                return None
 
-        return SampleInfo(str(data['md5']), str(data['sha1']), str(data['sha256']), label_pairs)
+            return SampleInfo(str(data['md5']), str(data['sha1']), str(data['sha256']), label_pairs)
+        return None
 
     @staticmethod
     def is_pup(av_label_pairs):
@@ -309,8 +318,8 @@ class AvLabels(object):
         ##################################################################
         # Token ranking: sorts tokens by decreasing count and then token #
         ##################################################################
-        sorted_tokens = sorted(iteritems(token_map),
-                               key=itemgetter(1, 0),
+        sorted_tokens = sorted(token_map.items(),
+                               key=lambda x: x[1] or 0,
                                reverse=True)
 
         # Delete the tokens appearing only in one AV, add rest to output

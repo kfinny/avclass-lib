@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(name='kfinny.avclass',
-      version='2.3',
+      version='3.0',
       description="A package for malicialab's avclass",
       url='https://github.com/kfinny/avclass-lib',
       author='Kevin Finnigin',
@@ -9,7 +9,7 @@ setup(name='kfinny.avclass',
       license='MIT',
       packages=find_packages(),
       install_requires=[
-            'six'
+            'vt-py'
       ],
       zip_safe=False,
       include_package_data=True)
